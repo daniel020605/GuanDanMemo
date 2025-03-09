@@ -162,6 +162,24 @@ class GuandanCardTracker:
             self.stop_game()
         self.root.destroy()
 
+    # def setup_areas(self):
+    #     """设置游戏区域"""
+    #     self.status_var.set("正在设置游戏区域...")
+    #
+    #     # 使用OpenCV捕获屏幕
+    #     screen = self.capture_screen()
+    #     if screen is None:
+    #         messagebox.showerror("错误", "无法捕获屏幕")
+    #         self.status_var.set("设置失败")
+    #         return
+    #
+    #     # 显示屏幕截图并让用户选择区域
+    #     if self.select_regions(screen):
+    #         self.status_var.set("游戏区域设置完成")
+    #         self.update_ui_state()
+    #     else:
+    #         self.status_var.set("游戏区域设置取消")
+
     def setup_areas(self):
         """设置游戏区域"""
         self.status_var.set("正在设置游戏区域...")
@@ -174,11 +192,111 @@ class GuandanCardTracker:
             return
 
         # 显示屏幕截图并让用户选择区域
-        if self.select_regions(screen):
+        if self.select_game_area(screen):
             self.status_var.set("游戏区域设置完成")
             self.update_ui_state()
         else:
             self.status_var.set("游戏区域设置取消")
+
+
+    def select_game_area(self, screen):
+        """让用户在屏幕截图上选择游戏区域"""
+        # 缩放图像以适应屏幕
+        h, w = screen.shape[:2]
+        scale_factor = min(1.0, 1200 / w, 800 / h)
+        scaled_w, scaled_h = int(w * scale_factor), int(h * scale_factor)
+        scaled_screen = cv2.resize(screen, (scaled_w, scaled_h))
+
+        # 创建窗口进行区域选择
+        window_name = "选择游戏区域"
+        cv2.namedWindow(window_name)
+
+        regions = []
+        current_rect = None
+        drawing = False
+
+        def mouse_callback(event, x, y, flags, param):
+            nonlocal drawing, current_rect, regions
+
+            if event == cv2.EVENT_LBUTTONDOWN:
+                drawing = True
+                current_rect = [(x, y)]
+
+            elif event == cv2.EVENT_MOUSEMOVE:
+                if drawing:
+                    img_copy = scaled_screen.copy()
+
+                    # 绘制当前正在绘制的矩形
+                    cv2.rectangle(img_copy, current_rect[0], (x, y), (0, 0, 255), 2)
+                    cv2.imshow(window_name, img_copy)
+
+            elif event == cv2.EVENT_LBUTTONUP:
+                drawing = False
+                current_rect.append((x, y))
+                regions.append(current_rect)
+
+                img_copy = scaled_screen.copy()
+                cv2.rectangle(img_copy, current_rect[0], current_rect[1], (0, 255, 0), 2)
+                cv2.imshow(window_name, img_copy)
+
+                # 完成选择
+                time.sleep(1)  # 给用户查看最终结果的时间
+                cv2.destroyWindow(window_name)
+
+        cv2.setMouseCallback(window_name, mouse_callback)
+        cv2.imshow(window_name, scaled_screen)
+        cv2.waitKey(0)
+
+        # 将选定的区域转换回原始尺寸
+        if len(regions) == 1:
+            self.game_area = self.scale_region(regions[0], 1 / scale_factor)
+            # 这里设置比例
+            self.calculate_regions()
+            return True
+        else:
+            messagebox.showwarning("警告", f"需要选择1个区域，但选择了{len(regions)}个")
+            return False
+
+    def calculate_regions(self):
+        """根据游戏区域和比例计算其他区域"""
+        if not self.game_area:
+            return
+
+        # 提取游戏区域坐标
+        x1, y1 = self.game_area[0]
+        x2, y2 = self.game_area[1]
+        width = x2 - x1
+        height = y2 - y1
+
+        # 计算手牌区域（已存在）
+        self.hand_area = (
+            (int(x1 + 0.0097 * width), int(y1 + 0.5286 * height)),
+            (int(x1 + 0.9893 * width), int(y1 + 0.9337 * height))
+        )
+
+        # 计算三个玩家区域（新增）
+        self.player_areas = [
+            # Player 1（左下玩家）
+            (
+                (int(x1 + 0.0754 * width), int(y1 + 0.3001 * height)),  # 左上角
+                (int(x1 + 0.3757 * width), int(y1 + 0.4883 * height))  # 右下角
+            ),
+            # Player 2（上方玩家）
+            (
+                (int(x1 + 0.2668 * width), int(y1 + 0.1239 * height)),  # 左上角
+                (int(x1 + 0.6880 * width), int(y1 + 0.2932 * height))  # 右下角
+            ),
+            # Player 3（右下玩家）
+            (
+                (int(x1 + 0.6030 * width), int(y1 + 0.2773 * height)),  # 左上角
+                (int(x1 + 0.9329 * width), int(y1 + 0.4642 * height))  # 右下角
+            )
+        ]
+
+        # 验证坐标有效性（可选）
+        for area in [self.hand_area] + self.player_areas:
+            assert area[0][0] < area[1][0], "水平坐标无效"
+            assert area[0][1] < area[1][1], "垂直坐标无效"
 
     def select_regions(self, screen):
         """让用户在屏幕截图上选择游戏区域"""
@@ -392,11 +510,12 @@ class GuandanCardTracker:
         # 转换为灰度图
 
         found_cards = []
+        img = image
 
         # 对每个卡牌模板进行匹配
         for card_name, template in self.card_templates.items():
             if card_name in ["BJoker", "RJoker"]:
-                img = image
+
                 #获取模板的原始尺寸
                 template_height, template_width = template.shape[:2]
 
@@ -437,7 +556,7 @@ class GuandanCardTracker:
 
 
             else:
-                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 # 获取模板的原始尺寸
                 template_height, template_width = template.shape[:2]
 
